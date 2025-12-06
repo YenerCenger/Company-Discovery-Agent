@@ -81,9 +81,217 @@ class InstagramScraper(BaseSocialScraper):
         logger.warning("No Instagram credentials, using public access")
         return L
 
+    def _search_duckduckgo_for_instagram(self, company_name: str, limit: int = 5) -> List[str]:
+        """
+        Search DuckDuckGo for Instagram profiles using crawl4ai (headless browser)
+        DuckDuckGo doesn't have cookie consent popups like Google
+        
+        Strategy: Search "company_name instagram" to find Instagram profiles
+        
+        Args:
+            company_name: Company name
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of Instagram profile URLs found via DuckDuckGo
+        """
+        import time
+        import random
+        import re
+        
+        # Clean company name - remove Turkish characters
+        def clean_turkish_chars(text: str) -> str:
+            replacements = {
+                'ı': 'i', 'İ': 'I', 'ş': 's', 'Ş': 'S',
+                'ğ': 'g', 'Ğ': 'G', 'ü': 'u', 'Ü': 'U',
+                'ö': 'o', 'Ö': 'O', 'ç': 'c', 'Ç': 'C'
+            }
+            for tr, en in replacements.items():
+                text = text.replace(tr, en)
+            return text
+        
+        company_clean = clean_turkish_chars(company_name)
+        
+        # DuckDuckGo search URL - no cookie consent!
+        search_query = f'{company_clean} instagram'
+        ddg_url = f"https://html.duckduckgo.com/html/?q={search_query.replace(' ', '+')}"
+        
+        logger.info(f"Searching DuckDuckGo for Instagram profiles", company_name=company_name, url=ddg_url)
+        
+        try:
+            # requests ile DuckDuckGo'yu aç (crawl4ai engelleniyordu)
+            import requests
+            
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+            }
+            
+            response = requests.get(ddg_url, headers=headers, timeout=15)
+            response.raise_for_status()
+            response_text = response.text
+            
+            if not response_text:
+                logger.warning("Empty HTML from DuckDuckGo")
+                return []
+            
+            logger.info(f"DuckDuckGo HTML received: {len(response_text)} chars")
+            
+            # DEBUG: HTML'i dosyaya kaydet (ilk 50000 karakter)
+            try:
+                debug_file = Path(__file__).parent.parent / "data" / "google_debug.html"
+                debug_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(debug_file, 'w', encoding='utf-8') as f:
+                    f.write(response_text[:50000])
+                logger.info(f"DuckDuckGo HTML saved to {debug_file}")
+            except Exception as e:
+                logger.debug(f"Could not save debug HTML: {e}")
+            
+            # Parse HTML - Basit yaklaşım: Regex ile direkt Instagram linklerini bul
+            from bs4 import BeautifulSoup
+            
+            instagram_profiles = []
+            seen_usernames = set()
+            
+            # Strategy 1: Daha esnek regex - URL encoded ve normal linkleri bul
+            # Google'da linkler şu formatlarda olabilir:
+            # - instagram.com/username
+            # - www.instagram.com/username  
+            # - https://instagram.com/username
+            # - https%3A%2F%2Finstagram.com%2Fusername (URL encoded)
+            
+            # Önce URL decode yap
+            import urllib.parse
+            decoded_html = urllib.parse.unquote(response_text)
+            
+            # Daha esnek pattern - sadece instagram.com/ sonrasındaki username'i al
+            instagram_pattern = r'(?:www\.)?instagram\.com/([a-zA-Z0-9_\.]+)'
+            matches = re.findall(instagram_pattern, decoded_html, re.IGNORECASE)
+            
+            # DEBUG: Kaç match bulundu
+            logger.info(f"Regex found {len(matches)} potential usernames in DuckDuckGo HTML")
+            
+            for username in matches:
+                # Sistem sayfalarını skip et
+                invalid = ['www', 'accounts', 'explore', 'direct', 'about', 'blog', 'developers', 'popular', 'help', 'legal', 'stories', 'reels', 'tv', 'p', 'reel', 'tags', 'locations']
+                if username.lower() not in invalid and username.lower() not in seen_usernames:
+                    seen_usernames.add(username.lower())
+                    url = f"https://instagram.com/{username}"
+                    instagram_profiles.append({
+                        "url": url,
+                        "username": username,
+                        "position": len(instagram_profiles) + 1
+                    })
+                    logger.debug(f"Found Instagram profile via regex: @{username}")
+                    if len(instagram_profiles) >= limit:
+                        break
+            
+            # Strategy 2: BeautifulSoup ile link extraction (fallback)
+            if not instagram_profiles:
+                logger.debug("Regex found nothing, trying BeautifulSoup")
+                soup = BeautifulSoup(response_text, 'html.parser')
+                all_links = soup.find_all('a', href=True)
+                
+                for link in all_links:
+                    href = link.get('href', '')
+                    
+                    # Skip ads ve Google'ın kendi linkleri
+                    if any(x in href for x in ['googleadservices.com', 'doubleclick.net', 'google.com/search', 'google.com/url']):
+                        continue
+                    
+                    # Instagram linki mi?
+                    if 'instagram.com' in href:
+                        # Post/reel değil, profil olmalı
+                        if any(x in href for x in ['/p/', '/reel/', '/tv/', '/stories/', '/explore/', '/accounts/']):
+                            continue
+                        
+                        # URL'yi temizle - Google'ın redirect URL'lerini handle et
+                        import urllib.parse
+                        
+                        if href.startswith('/url?q='):
+                            href = urllib.parse.unquote(href.split('/url?q=')[1].split('&')[0])
+                        elif href.startswith('/url?'):
+                            # Google'ın redirect URL'i
+                            try:
+                                parsed = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+                                if 'q' in parsed:
+                                    href = urllib.parse.unquote(parsed['q'][0])
+                            except:
+                                pass
+                        
+                        # URL decode
+                        try:
+                            href = urllib.parse.unquote(href)
+                        except:
+                            pass
+                        
+                        # Username çıkar
+                        username = None
+                        if 'instagram.com/' in href:
+                            # instagram.com/username veya instagram.com/@username
+                            parts = href.split('instagram.com/')
+                            if len(parts) > 1:
+                                username = parts[1].split('/')[0].split('?')[0].split('#')[0]
+                                if username.startswith('@'):
+                                    username = username[1:]
+                        
+                        # Geçerli username mi?
+                        if username and len(username) > 0:
+                            # Sistem sayfalarını skip et
+                            invalid = ['www', 'accounts', 'explore', 'direct', 'about', 'blog', 'developers', 'popular', 'help', 'legal', 'stories', 'reels', 'tv', 'p', 'reel', 'tags', 'locations']
+                            if username.lower() not in invalid:
+                                if username.lower() not in seen_usernames:
+                                    seen_usernames.add(username.lower())
+                                    url = f"https://instagram.com/{username}"
+                                    instagram_profiles.append({
+                                        "url": url,
+                                        "username": username,
+                                        "position": len(instagram_profiles) + 1  # İlk bulunan = en üstte
+                                    })
+                                    logger.debug(f"Found Instagram profile: @{username} (position: {len(instagram_profiles)})")
+                                    
+                                    # İlk birkaç sonuç yeterli (Google'ın en üstteki sonuçları)
+                                    if len(instagram_profiles) >= limit:
+                                        break
+            
+            # Sort by position (Google's ranking - first results are usually best)
+            instagram_profiles.sort(key=lambda x: x["position"])
+            
+            # Limit to first N results (Google's top results are usually the best)
+            instagram_profiles = instagram_profiles[:limit]
+            
+            # Return just URLs for now (we'll check followers later)
+            instagram_urls = [p["url"] for p in instagram_profiles]
+            
+            # Bulunan profilleri logla
+            if instagram_profiles:
+                usernames = [f"@{p['username']}" for p in instagram_profiles]
+                logger.info(
+                    f"🔍 DuckDuckGo found {len(instagram_urls)} Instagram profiles: {', '.join(usernames)}"
+                )
+            else:
+                logger.info(f"DuckDuckGo found 0 Instagram profiles")
+            
+            # Debug: Eğer hiç bulamadıysak HTML'in bir kısmını logla
+            if not instagram_urls:
+                logger.debug(f"DuckDuckGo HTML length: {len(response_text)} chars")
+                # Instagram kelimesi var mı kontrol et
+                if 'instagram' in response_text.lower():
+                    logger.debug("'instagram' found in DuckDuckGo HTML but couldn't extract profiles")
+                else:
+                    logger.debug("'instagram' NOT found in DuckDuckGo HTML")
+            
+            return instagram_urls
+            
+        except Exception as e:
+            logger.warning(f"Google search failed: {e}")
+            return []
+
     def _try_common_usernames(self, company_name: str, limit: int = 5) -> List[Dict]:
         """
         Try common username patterns and return found profiles
+        Uses Google Dorking first, then falls back to direct username checks
         
         Args:
             company_name: Company name
@@ -93,57 +301,122 @@ class InstagramScraper(BaseSocialScraper):
             List of profile dictionaries with username and followers_count
         """
         import instaloader
+        import time
+        import random
         
         L = self._get_authenticated_loader()
         
-        # Clean company name
-        name_clean = company_name.lower().strip()
-        name_clean = name_clean.replace(" real estate", "").replace(" properties", "")
-        name_clean = name_clean.replace(" group", "").replace(" company", "")
-        name_clean = name_clean.replace(" inc", "").replace(" ltd", "").replace(" llc", "")
-        
-        # Generate simple variations (just the most common ones)
-        base = name_clean.replace(" ", "").replace("&", "").replace(".", "").replace(",", "")
-        base = base.replace("-", "").replace("_", "").replace("'", "").replace('"', "")
-        
-        if not base or len(base) < 3:
-            return []
-        
-        # Common patterns to try (limited to 5-6 most common)
-        usernames_to_try = [
-            base,  # Direct: "folkart"
-            f"{base}official",  # With official: "folkartofficial"
-            f"{base}_official",  # With underscore: "folkart_official"
-        ]
-        
-        # If has multiple words, try with separator
-        if " " in name_clean:
-            parts = [p.replace(" ", "").replace("-", "") for p in name_clean.split() if p]
-            if len(parts) > 1:
-                usernames_to_try.extend([
-                    "_".join(parts),  # "folk_art"
-                    "".join(parts),   # "folkart" (already added, but keep for clarity)
-                ])
-        
-        # Limit to avoid too many requests
-        usernames_to_try = usernames_to_try[:limit]
-        
         found_profiles = []
         
-        for username in usernames_to_try:
-            try:
-                profile = instaloader.Profile.from_username(L.context, username)
-                found_profiles.append({
-                    "username": profile.username,
-                    "followers": profile.followers,
-                    "profile": profile
-                })
-                logger.debug(f"Found profile: @{username} ({profile.followers:,} followers)")
-            except instaloader.exceptions.ProfileNotExistsException:
-                continue
-            except Exception as e:
-                logger.debug(f"Error checking {username}: {e}")
-                continue
+        # Strategy 1: Google Dorking (safer, avoids bot detection)
+        # Google'ın ilk sonuçları genelde en büyük/doğru firmalar oluyor
+        google_urls = self._search_duckduckgo_for_instagram(company_name, limit=limit)
+        
+        if google_urls:
+            logger.info(f"Checking {len(google_urls)} profiles found via Google (top results are usually best)")
+            for i, url in enumerate(google_urls, 1):
+                try:
+                    # Extract username from URL
+                    username = url.split('instagram.com/')[-1].split('/')[0].split('?')[0]
+                    
+                    # Random delay between requests (longer delays to avoid rate limiting)
+                    delay = random.uniform(5, 8)  # 5-8 saniye arası bekle
+                    if i > 1:  # İlk istekten sonra bekle
+                        time.sleep(delay)
+                    
+                    profile = instaloader.Profile.from_username(L.context, username)
+                    found_profiles.append({
+                        "username": profile.username,
+                        "followers": profile.followers,
+                        "profile": profile,
+                        "source": "google",
+                        "google_position": i  # Google'daki sıralama
+                    })
+                    logger.info(
+                        f"Found profile via Google (position {i}): @{username} ({profile.followers:,} followers)"
+                    )
+                    
+                    # Google'ın ilk 2-3 sonucu genelde en iyisi, onları kontrol et yeter
+                    # Ama limit'e kadar devam et
+                    if len(found_profiles) >= limit:
+                        break
+                        
+                except instaloader.exceptions.ProfileNotExistsException:
+                    logger.debug(f"Profile @{username} not found (from Google result)")
+                    continue
+                except Exception as e:
+                    logger.debug(f"Error checking {username}: {e}")
+                    continue
+        
+        # Strategy 2: Fallback to common username patterns (if Google didn't find enough)
+        if len(found_profiles) < limit:
+            logger.info("Trying common username patterns as fallback")
+            
+            # Türkçe karakterleri temizle - Instagram username'lerde Türkçe karakter yok
+            def clean_turkish(text: str) -> str:
+                replacements = {
+                    'ı': 'i', 'İ': 'I', 'ş': 's', 'Ş': 'S',
+                    'ğ': 'g', 'Ğ': 'G', 'ü': 'u', 'Ü': 'U',
+                    'ö': 'o', 'Ö': 'O', 'ç': 'c', 'Ç': 'C'
+                }
+                for tr, en in replacements.items():
+                    text = text.replace(tr, en)
+                return text
+            
+            # Clean company name
+            name_clean = clean_turkish(company_name.lower().strip())
+            name_clean = name_clean.replace(" real estate", "").replace(" properties", "")
+            name_clean = name_clean.replace(" group", "").replace(" company", "")
+            name_clean = name_clean.replace(" inc", "").replace(" ltd", "").replace(" llc", "")
+            name_clean = name_clean.replace(" yapi", "").replace(" insaat", "")  # Türkçe kelimeler
+            
+            # Generate simple variations
+            base = name_clean.replace(" ", "").replace("&", "").replace(".", "").replace(",", "")
+            base = base.replace("-", "").replace("_", "").replace("'", "").replace('"', "")
+            
+            if base and len(base) >= 3:
+                # Ana firma adı ve varyasyonları
+                usernames_to_try = [
+                    base,  # folkart
+                    f"{base}yapi",  # folkartyapi (yapı şirketleri için)
+                    f"{base}_yapi",  # folkart_yapi
+                    f"{base}insaat",  # folkartinsaat
+                    f"{base}_insaat",  # folkart_insaat
+                    f"{base}official",  # folkartofficial
+                    f"{base}_official",  # folkart_official
+                ]
+                
+                logger.info(f"Trying usernames: {usernames_to_try[:5]}")
+                
+                if " " in name_clean:
+                    parts = [p.replace(" ", "").replace("-", "") for p in name_clean.split() if p]
+                    if len(parts) > 1:
+                        usernames_to_try.extend(["_".join(parts)])
+                
+                for username in usernames_to_try[:3]:  # Limit to 3 more attempts
+                    if len(found_profiles) >= limit:
+                        break
+                    
+                    # Skip if already found
+                    if any(p["username"] == username for p in found_profiles):
+                        continue
+                    
+                    try:
+                        # Random delay
+                        time.sleep(random.uniform(3, 6))
+                        
+                        profile = instaloader.Profile.from_username(L.context, username)
+                        found_profiles.append({
+                            "username": profile.username,
+                            "followers": profile.followers,
+                            "profile": profile
+                        })
+                        logger.debug(f"Found profile: @{username} ({profile.followers:,} followers)")
+                    except instaloader.exceptions.ProfileNotExistsException:
+                        continue
+                    except Exception as e:
+                        logger.debug(f"Error checking {username}: {e}")
+                        continue
         
         return found_profiles
 
@@ -234,19 +507,20 @@ class InstagramScraper(BaseSocialScraper):
                 logger.warning(f"No Instagram profiles found", company_name=company_name)
                 return None
 
-            # Sort by followers (highest first) - this is the "first 5 results" sorted by followers
-            found_profiles.sort(key=lambda x: x["followers"], reverse=True)
+            # Sort by: Google position first (ilk sonuçlar genelde en iyi), then by followers
+            # Google'ın algoritması zaten en popüler/doğru profilleri üstte gösteriyor
+            found_profiles.sort(key=lambda x: (
+                x.get("google_position", 999),  # Google pozisyonu (1 en iyi)
+                -x["followers"]  # Sonra takipçi sayısı (yüksek olan önce)
+            ))
             
-            # Get the profile with highest followers (best match from first 5)
+            # Get the best match (Google'ın ilk sonucu genelde en doğru, ama takipçi sayısına da bak)
             best_match = found_profiles[0]
             profile = best_match["profile"]
             
             logger.info(
-                f"Selected Instagram profile",
-                company_name=company_name,
-                username=profile.username,
-                followers=profile.followers,
-                total_found=len(search_results)
+                f"✅ Selected Instagram profile: @{profile.username} ({profile.followers:,} followers)",
+                company_name=company_name
             )
 
             return {
