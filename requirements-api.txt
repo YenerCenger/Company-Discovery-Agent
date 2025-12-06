@@ -1,0 +1,25 @@
+# Minimal requirements for API testing (no compilation needed)
+
+# API Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Configuration & Validation
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv==1.0.1
+
+# Logging
+structlog==24.1.0
+
+# Video Downloads
+yt-dlp==2024.3.10
+instaloader==4.11
+
+# Web Scraping
+requests==2.31.0
+beautifulsoup4==4.12.2
+
+# Utilities
+python-dateutil==2.8.2
+validators==0.22.0
