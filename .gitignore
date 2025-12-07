@@ -25,6 +25,10 @@ dist/
 
 # Data
 data/downloads/
+data/.instaloader_session
+data/crawl_cache/
+data/google_debug.html
+scrapers/data/google_debug.html
 *.mp4
 
 # Logs
