@@ -14,7 +14,7 @@ from config.logging_config import get_logger
 FALLBACK_VIDEO_URLS = [
     {
         "external_post_id": "DJ1Xb9nN-vf",
-        "post_url": "https://www.instagram.com/reel/DJoz3hNJ2Mx/",
+        "post_url": "https://www.instagram.com/reel/DQbFWXPkiAx/",
         "post_type": "reel",
         "caption_text": "Fallback video - Instagram rate limit bypass",
         "published_at": datetime.now(timezone.utc).isoformat() + "Z",

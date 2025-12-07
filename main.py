@@ -21,6 +21,7 @@ import uvicorn
 # FastAPI imports
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ConfigDict
 
 # Database and agents
@@ -394,6 +395,20 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include routers
+from modules.video_processor_agent.routers import analysis, llm_data
+app.include_router(analysis.router, prefix="/api/v1", tags=["Video Analysis"])
+app.include_router(llm_data.router, prefix="/api/v1", tags=["LLM Data"])
+
 
 @app.get("/")
 async def root():
@@ -618,6 +633,101 @@ async def get_status():
             downloaded_videos=downloaded,
             pending_downloads=pending
         )
+
+
+@app.get("/api/report")
+async def get_latest_report():
+    """
+    Get the latest AI report from reports directory
+    
+    Returns the most recent report JSON file
+    """
+    try:
+        import json
+        from pathlib import Path
+        
+        # Reports klasörünü bul
+        project_root = Path(__file__).parent
+        reports_dir = project_root / "reports"
+        
+        if not reports_dir.exists():
+            raise HTTPException(status_code=404, detail="Reports directory not found")
+        
+        # Tüm tarih klasörlerini kontrol et (en yeni önce)
+        latest_report = None
+        latest_file = None
+        
+        for date_dir in sorted(reports_dir.iterdir(), reverse=True):
+            if date_dir.is_dir():
+                json_files = list(date_dir.glob("*.json"))
+                if json_files:
+                    # En yeni dosyayı al
+                    latest_json = max(json_files, key=lambda f: f.stat().st_mtime)
+                    try:
+                        with open(latest_json, "r", encoding="utf-8") as f:
+                            latest_report = json.load(f)
+                            latest_file = latest_json
+                            break  # En yeni raporu bulduk
+                    except Exception as e:
+                        logger.warning(f"Error reading report file {latest_json}: {e}")
+                        continue
+        
+        if not latest_report:
+            raise HTTPException(status_code=404, detail="No reports found in reports directory")
+        
+        logger.info(f"Serving report from: {latest_file}")
+        
+        # llm_recommendations zaten parse edilmiş olabilir, kontrol et
+        recommendations = latest_report.get("llm_recommendations", {})
+        
+        # Eğer recommendations zaten dict ise ve içinde marketing_recommendations varsa
+        # direkt kullan, parse etmeye gerek yok
+        if isinstance(recommendations, dict) and "marketing_recommendations" in recommendations:
+            # Zaten parse edilmiş, direkt döndür
+            return {
+                "metadata": latest_report.get("metadata", {}),
+                "preprocessing_summary": latest_report.get("preprocessing_summary", {}),
+                "statistics_summary": latest_report.get("statistics_summary", {}),
+                "llm_interpretation": latest_report.get("llm_interpretation", {}),
+                "llm_recommendations": {
+                    "raw_response": "",
+                    "parsed": recommendations
+                }
+            }
+        
+        # Parse recommendations if needed (eski format için)
+        parsed_recommendations = {}
+        if isinstance(recommendations, dict):
+            if recommendations.get("parsed"):
+                parsed_recommendations = recommendations.get("parsed", {})
+            elif recommendations.get("raw_response"):
+                try:
+                    import re
+                    raw_response = recommendations.get("raw_response", "")
+                    json_match = re.search(r'\{[\s\S]*\}', raw_response)
+                    if json_match:
+                        parsed_recommendations = json.loads(json_match.group(0))
+                except Exception as e:
+                    logger.warning(f"Failed to parse recommendations JSON: {e}")
+                    parsed_recommendations = {}
+        
+        # Return report data
+        return {
+            "metadata": latest_report.get("metadata", {}),
+            "preprocessing_summary": latest_report.get("preprocessing_summary", {}),
+            "statistics_summary": latest_report.get("statistics_summary", {}),
+            "llm_interpretation": latest_report.get("llm_interpretation", {}),
+            "llm_recommendations": {
+                "raw_response": recommendations.get("raw_response", "") if isinstance(recommendations, dict) else str(recommendations),
+                "parsed": parsed_recommendations
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Report analysis error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to load report: {str(e)}")
 
 
 # ============================================================================
