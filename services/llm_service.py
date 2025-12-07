@@ -1,9 +1,7 @@
 """
 LLM Service for structured data extraction from HTML
 
-Supports multiple providers:
-- Ollama (local, slower but free)
-- Groq (cloud, much faster with free tier)
+Uses Ollama for local LLM inference.
 """
 
 import json
@@ -15,14 +13,14 @@ from config.settings import settings
 logger = structlog.get_logger(__name__)
 
 
-class OllamaLLMService:
+class LLMService:
     """Service for interacting with Ollama API"""
     
     def __init__(
         self,
         base_url: str = None,
         model: str = None,
-        timeout: int = 120
+        timeout: int = 300
     ):
         """
         Initialize Ollama LLM service
@@ -37,7 +35,7 @@ class OllamaLLMService:
         self.timeout = timeout
         
         logger.info(
-            "Initialized OllamaLLMService",
+            "Initialized LLMService (Ollama)",
             base_url=self.base_url,
             model=self.model
         )
@@ -145,158 +143,49 @@ class OllamaLLMService:
         except Exception as e:
             logger.error(f"JSON extraction error: {e}", exc_info=True)
             return None
-
-
-class GroqLLMService:
-    """Service for interacting with Groq API (fast cloud LLM)"""
-
-    def __init__(
-        self,
-        api_key: str = None,
-        model: str = None,
-        timeout: int = 60
-    ):
+    
+    def check_available(self) -> bool:
         """
-        Initialize Groq LLM service
-
-        Args:
-            api_key: Groq API key (default from settings)
-            model: Model name (default from settings)
-            timeout: Request timeout in seconds
-        """
-        self.api_key = api_key or settings.GROQ_API_KEY
-        self.model = model or settings.GROQ_MODEL
-        self.timeout = timeout
-        self.base_url = "https://api.groq.com/openai/v1"
-
-        if not self.api_key:
-            raise ValueError(
-                "Groq API key is required. Set GROQ_API_KEY in .env file or environment"
-            )
-
-        logger.info(
-            "Initialized GroqLLMService",
-            model=self.model
-        )
-
-    def generate(
-        self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        temperature: float = 0.1,
-        max_tokens: int = 4000
-    ) -> str:
-        """
-        Generate completion from Groq
-
-        Args:
-            prompt: User prompt
-            system_prompt: System prompt for context
-            temperature: Sampling temperature (0.0 = deterministic)
-            max_tokens: Maximum tokens to generate
-
+        Check if Ollama is running and model is available
+        
         Returns:
-            Generated text
+            True if Ollama is accessible, False otherwise
         """
         try:
-            url = f"{self.base_url}/chat/completions"
-
-            messages = []
-            if system_prompt:
-                messages.append({
-                    "role": "system",
-                    "content": system_prompt
-                })
-
-            messages.append({
-                "role": "user",
-                "content": prompt
-            })
-
-            payload = {
-                "model": self.model,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens
-            }
-
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
-
-            logger.debug(
-                "Sending request to Groq",
-                model=self.model,
-                prompt_length=len(prompt)
-            )
-
-            response = requests.post(
-                url,
-                json=payload,
-                headers=headers,
-                timeout=self.timeout
-            )
-
+            url = f"{self.base_url}/api/tags"
+            response = requests.get(url, timeout=5)
             response.raise_for_status()
-            result = response.json()
-
-            generated_text = result["choices"][0]["message"]["content"]
-
-            logger.debug(
-                "Received response from Groq",
-                response_length=len(generated_text)
+            
+            data = response.json()
+            models = data.get("models", [])
+            model_names = [m.get("name", "") for m in models]
+            
+            model_available = any(
+                self.model in name
+                for name in model_names
             )
-
-            return generated_text
-
-        except requests.exceptions.Timeout:
-            logger.error("Groq request timeout", timeout=self.timeout)
-            raise Exception(f"Groq timeout after {self.timeout}s")
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 401:
-                logger.error("Groq API authentication failed - check your API key")
-                raise Exception("Invalid Groq API key")
-            elif e.response.status_code == 429:
-                logger.error("Groq rate limit exceeded")
-                raise Exception("Groq rate limit exceeded - try again later")
+            
+            if model_available:
+                logger.info(f"Ollama model {self.model} is available")
             else:
-                logger.error(f"Groq API error: {e}")
-                raise
+                logger.warning(
+                    f"Model {self.model} not found",
+                    available_models=model_names,
+                    hint=f"Run: ollama pull {self.model}"
+                )
+            
+            return model_available
+            
         except Exception as e:
-            logger.error(f"Groq generation error: {e}", exc_info=True)
-            raise
+            logger.warning(
+                f"Ollama not available: {e}",
+                hint="Make sure Ollama is running: 'ollama serve'"
+            )
+            return False
 
-    def extract_json_from_text(self, text: str) -> Optional[Dict]:
-        """
-        Extract JSON from LLM response
 
-        Args:
-            text: Text containing JSON (may have markdown code blocks)
-
-        Returns:
-            Parsed JSON dict or None if parsing failed
-        """
-        try:
-            # Remove markdown code blocks if present
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0]
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0]
-
-            # Clean up whitespace
-            text = text.strip()
-
-            # Parse JSON
-            data = json.loads(text)
-            return data
-
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse JSON: {e}", text_preview=text[:200])
-            return None
-        except Exception as e:
-            logger.error(f"JSON extraction error: {e}", exc_info=True)
-            return None
+# Alias for backward compatibility
+OllamaLLMService = LLMService
 
 
 class HTMLCompanyExtractor:
@@ -307,18 +196,9 @@ class HTMLCompanyExtractor:
         Initialize HTML company extractor
 
         Args:
-            llm_service: Optional LLM service (will create default based on settings)
+            llm_service: Optional LLM service (will create default if not provided)
         """
-        if llm_service:
-            self.llm = llm_service
-        else:
-            # Auto-select LLM provider based on settings
-            if settings.LLM_PROVIDER == "groq":
-                logger.info("Using Groq API for LLM extraction")
-                self.llm = GroqLLMService()
-            else:
-                logger.info("Using Ollama for LLM extraction")
-                self.llm = OllamaLLMService()
+        self.llm = llm_service or LLMService()
     
     def extract_companies(
         self,
@@ -350,8 +230,7 @@ class HTMLCompanyExtractor:
             text_content = soup.get_text(separator='\n', strip=True)
 
             # Truncate if too long (Ollama context limit)
-            # Reduced to improve processing speed and reduce timeouts
-            max_chars = 10000  # Leave room for prompt (reduced from 15000)
+            max_chars = 10000  # Leave room for prompt
             if len(text_content) > max_chars:
                 text_content = text_content[:max_chars] + "\n... [content truncated]"
             
@@ -451,34 +330,4 @@ Extract companies in JSON format. Return only the JSON, no other text."""
         Returns:
             True if Ollama is accessible, False otherwise
         """
-        try:
-            url = f"{self.llm.base_url}/api/tags"
-            response = requests.get(url, timeout=5)
-            response.raise_for_status()
-            
-            data = response.json()
-            models = data.get("models", [])
-            model_names = [m.get("name", "") for m in models]
-            
-            model_available = any(
-                self.llm.model in name
-                for name in model_names
-            )
-            
-            if model_available:
-                logger.info(f"Ollama model {self.llm.model} is available")
-            else:
-                logger.warning(
-                    f"Model {self.llm.model} not found",
-                    available_models=model_names,
-                    hint=f"Run: ollama pull {self.llm.model}"
-                )
-            
-            return model_available
-            
-        except Exception as e:
-            logger.warning(
-                f"Ollama not available: {e}",
-                hint="Make sure Ollama is running: 'ollama serve'"
-            )
-            return False
+        return self.llm.check_available()

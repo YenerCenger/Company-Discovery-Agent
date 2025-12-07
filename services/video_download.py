@@ -101,9 +101,9 @@ class VideoDownloadService:
         safe_post_id = sanitize_filename(post_id)
         output_template = str(output_dir / f"{safe_post_id}.%(ext)s")
 
-        # Build yt-dlp command
+        # Build yt-dlp command (use python -m for compatibility)
         cmd = [
-            "yt-dlp",
+            "python", "-m", "yt_dlp",
             "--output", output_template,
             "--no-playlist",
             "--write-info-json",
@@ -189,7 +189,7 @@ class VideoDownloadService:
                 "error": error_msg
             }
         except FileNotFoundError:
-            error_msg = "yt-dlp not found. Please install: pip install yt-dlp"
+            error_msg = "Python or yt-dlp not found. Please install: python -m pip install yt-dlp"
             logger.error(error_msg)
             return {
                 "status": "error",
@@ -248,7 +248,7 @@ class VideoDownloadService:
             Dictionary with video metadata or None if failed
         """
         cmd = [
-            "yt-dlp",
+            "python", "-m", "yt_dlp",
             "--dump-json",
             "--no-playlist",
         ]

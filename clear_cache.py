@@ -24,3 +24,5 @@ if cache_dir.exists():
 else:
     print("ℹ️  Cache dizini yok")
 
+
+

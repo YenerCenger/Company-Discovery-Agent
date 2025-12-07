@@ -18,3 +18,5 @@ if session_file.exists():
 else:
     print(f"ℹ️  Session dosyası zaten yok: {session_file}")
 
+
+

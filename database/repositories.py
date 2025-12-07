@@ -212,6 +212,8 @@ class VideoDownloadJobRepository:
                 job.error_message = error_message
             job.updated_at = datetime.now(timezone.utc)
             self.session.add(job)
+            self.session.flush()  # Değişikliği hemen kaydet
+            self.session.refresh(job)  # Güncel veriyi al
 
     def find_pending_jobs(self, limit: int = 100) -> List[VideoDownloadJob]:
         """Find pending download jobs"""
