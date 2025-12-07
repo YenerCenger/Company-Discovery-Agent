@@ -1,5 +1,5 @@
 from typing import List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from agents.base import BaseAgent
 from database.models import SocialProfile, SocialPost
 from database.repositories import SocialPostRepository
@@ -64,7 +64,7 @@ class VideoFinderAgent(BaseAgent[SocialProfile, SocialPost]):
 
         # Filter and process posts
         posts = []
-        cutoff_date = datetime.utcnow() - timedelta(days=settings.VIDEO_FINDER_DAYS_BACK)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=settings.VIDEO_FINDER_DAYS_BACK)
 
         for raw_post in raw_posts:
             try:
@@ -108,7 +108,7 @@ class VideoFinderAgent(BaseAgent[SocialProfile, SocialPost]):
                     "comment_count": raw_post.get("comment_count"),
                     "view_count": raw_post.get("view_count"),
                     "saved_count": raw_post.get("saved_count"),
-                    "last_scraped_at": datetime.utcnow()
+                    "last_scraped_at": datetime.now(timezone.utc)
                 })
 
                 posts.append(post)
@@ -148,7 +148,7 @@ class VideoFinderAgent(BaseAgent[SocialProfile, SocialPost]):
             profile = self.db.get(SocialProfile, input_data.id)
             if profile:
                 profile.content_type = content_type
-                profile.last_scraped_at = datetime.utcnow()
+                profile.last_scraped_at = datetime.now(timezone.utc)
                 self.db.add(profile)
                 self.db.commit()
 
@@ -163,7 +163,7 @@ class VideoFinderAgent(BaseAgent[SocialProfile, SocialPost]):
     def _parse_date(self, date_str: str) -> datetime:
         """Parse ISO format date string to datetime"""
         if not date_str:
-            return datetime.utcnow()
+            return datetime.now(timezone.utc)
 
         try:
             # Handle ISO format with 'Z'
@@ -171,7 +171,7 @@ class VideoFinderAgent(BaseAgent[SocialProfile, SocialPost]):
                 date_str = date_str[:-1] + '+00:00'
             return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
         except Exception:
-            return datetime.utcnow()
+            return datetime.now(timezone.utc)
 
     def _sort_posts_by_performance(self, posts: List[SocialPost]) -> List[SocialPost]:
         """

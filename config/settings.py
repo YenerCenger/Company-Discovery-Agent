@@ -34,12 +34,22 @@ class Settings(BaseSettings):
     CRAWL4AI_CACHE_ENABLED: bool = True
     CRAWL4AI_CACHE_EXPIRY_HOURS: int = 24
 
+    # LLM Provider Selection
+    LLM_PROVIDER: str = "groq"  # "ollama" or "groq"
+
     # Ollama LLM Settings (for HTML parsing)
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "gemma3:4b"  # Using gemma3:4b
-    OLLAMA_TIMEOUT: int = 120  # Seconds for LLM generation
+    OLLAMA_TIMEOUT: int = 300  # Seconds for LLM generation (increased from 120)
     OLLAMA_TEMPERATURE: float = 0.1  # Low temp for structured output
     OLLAMA_MAX_TOKENS: int = 4000
+
+    # Groq API Settings (faster alternative to Ollama)
+    GROQ_API_KEY: Optional[str] = None
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"  # Fast and powerful
+    GROQ_TIMEOUT: int = 60  # Much faster than Ollama
+    GROQ_TEMPERATURE: float = 0.1
+    GROQ_MAX_TOKENS: int = 4000
 
     # Video Download Settings
     DOWNLOAD_BASE_PATH: Path = Path(__file__).parent.parent / "data" / "downloads"
@@ -52,6 +62,7 @@ class Settings(BaseSettings):
     VIDEO_FINDER_MIN_VIEWS: int = 100
     VIDEO_FINDER_TOP_N: int = 50  # Get top N best performing videos per profile
     VIDEO_SORT_BY: str = "views"  # "views", "engagement", "likes"
+    VIDEO_DOWNLOAD_PER_COMPANY: int = 5  # Number of videos to download per company
 
     # API Keys (Future Use)
     YOUTUBE_API_KEY: Optional[str] = None

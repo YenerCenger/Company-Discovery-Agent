@@ -318,23 +318,44 @@ class InstagramScraper(BaseSocialScraper):
                 try:
                     # Extract username from URL
                     username = url.split('instagram.com/')[-1].split('/')[0].split('?')[0]
-                    
+
                     # Random delay between requests (longer delays to avoid rate limiting)
                     delay = random.uniform(5, 8)  # 5-8 saniye arası bekle
                     if i > 1:  # İlk istekten sonra bekle
                         time.sleep(delay)
-                    
-                    profile = instaloader.Profile.from_username(L.context, username)
-                    found_profiles.append({
-                        "username": profile.username,
-                        "followers": profile.followers,
-                        "profile": profile,
-                        "source": "google",
-                        "google_position": i  # Google'daki sıralama
-                    })
-                    logger.info(
-                        f"Found profile via Google (position {i}): @{username} ({profile.followers:,} followers)"
-                    )
+
+                    try:
+                        profile = instaloader.Profile.from_username(L.context, username)
+                        found_profiles.append({
+                            "username": profile.username,
+                            "followers": profile.followers,
+                            "profile": profile,
+                            "source": "google",
+                            "google_position": i  # Google'daki sıralama
+                        })
+                        logger.info(
+                            f"Found profile via Google (position {i}): @{username} ({profile.followers:,} followers)"
+                        )
+                    except (instaloader.exceptions.LoginRequiredException, instaloader.exceptions.QueryReturnedBadRequestException):
+                        # Session yoksa veya 401 hatası alırsa, follower bilgisi olmadan ekle
+                        logger.warning(f"Could not fetch full profile for @{username} (login required), using basic info")
+                        # Mock profile objesi oluştur (minimal bilgi ile)
+                        class MockProfile:
+                            def __init__(self, uname):
+                                self.username = uname
+                                self.followers = 0  # Bilinmiyor
+                                self.mediacount = 0
+                                self.biography = ""
+
+                        mock_profile = MockProfile(username)
+                        found_profiles.append({
+                            "username": username,
+                            "followers": 0,  # Follower sayısını bilemiyoruz
+                            "profile": mock_profile,
+                            "source": "google",
+                            "google_position": i
+                        })
+                        logger.info(f"Added profile without follower count: @{username} (position {i})")
                     
                     # Google'ın ilk 2-3 sonucu genelde en iyisi, onları kontrol et yeter
                     # Ama limit'e kadar devam et
@@ -348,8 +369,8 @@ class InstagramScraper(BaseSocialScraper):
                     logger.debug(f"Error checking {username}: {e}")
                     continue
         
-        # Strategy 2: Fallback to common username patterns (if Google didn't find enough)
-        if len(found_profiles) < limit:
+        # Strategy 2: Fallback to common username patterns (ONLY if Google found nothing)
+        if len(found_profiles) == 0:
             logger.info("Trying common username patterns as fallback")
             
             # Türkçe karakterleri temizle - Instagram username'lerde Türkçe karakter yok
@@ -507,16 +528,19 @@ class InstagramScraper(BaseSocialScraper):
                 logger.warning(f"No Instagram profiles found", company_name=company_name)
                 return None
 
-            # Sort by: Google position first (ilk sonuçlar genelde en iyi), then by followers
-            # Google'ın algoritması zaten en popüler/doğru profilleri üstte gösteriyor
-            found_profiles.sort(key=lambda x: (
-                x.get("google_position", 999),  # Google pozisyonu (1 en iyi)
-                -x["followers"]  # Sonra takipçi sayısı (yüksek olan önce)
-            ))
-            
-            # Get the best match (Google'ın ilk sonucu genelde en doğru, ama takipçi sayısına da bak)
+            # Sort by follower count (highest first)
+            # We want the most popular profile for the company
+            found_profiles.sort(key=lambda x: -x["followers"])
+
+            # Get the profile with highest follower count
             best_match = found_profiles[0]
             profile = best_match["profile"]
+
+            logger.info(
+                f"Considered {len(found_profiles)} profiles, selected highest follower count",
+                company_name=company_name,
+                profiles=[f"@{p['profile'].username} ({p['followers']:,})" for p in found_profiles[:5]]
+            )
             
             logger.info(
                 f"✅ Selected Instagram profile: @{profile.username} ({profile.followers:,} followers)",

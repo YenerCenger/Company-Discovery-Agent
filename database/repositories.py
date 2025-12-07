@@ -1,7 +1,7 @@
 from sqlmodel import Session, select
 from typing import List, Optional, Dict
 from uuid import UUID
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from database.models import Company, SocialProfile, SocialPost, VideoDownloadJob
 from utils.text_processing import normalize_company_name
 
@@ -47,7 +47,7 @@ class CompanyRepository:
                 existing.importance_score = company_data["importance_score"]
                 existing.website_url = company_data.get("website_url") or existing.website_url
                 existing.source = company_data.get("source") or existing.source
-                existing.updated_at = datetime.utcnow()
+                existing.updated_at = datetime.now(timezone.utc)
                 self.session.add(existing)
                 self.session.flush()
                 self.session.refresh(existing)
@@ -69,7 +69,7 @@ class CompanyRepository:
         company = self.session.get(Company, company_id)
         if company:
             company.importance_score = score
-            company.updated_at = datetime.utcnow()
+            company.updated_at = datetime.now(timezone.utc)
             self.session.add(company)
 
 
@@ -121,8 +121,8 @@ class SocialProfileRepository:
                 profile.posts_count = posts_count
             if engagement_score is not None:
                 profile.engagement_score = engagement_score
-            profile.last_scraped_at = datetime.utcnow()
-            profile.updated_at = datetime.utcnow()
+            profile.last_scraped_at = datetime.now(timezone.utc)
+            profile.updated_at = datetime.now(timezone.utc)
             self.session.add(profile)
 
 
@@ -154,7 +154,7 @@ class SocialPostRepository:
         self, profile_id: UUID, days: int = 90
     ) -> List[SocialPost]:
         """Find posts from the last N days for a profile"""
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
         statement = select(SocialPost).where(
             SocialPost.social_profile_id == profile_id,
             SocialPost.published_at >= cutoff_date
@@ -210,7 +210,7 @@ class VideoDownloadJobRepository:
                 job.file_path = file_path
             if error_message:
                 job.error_message = error_message
-            job.updated_at = datetime.utcnow()
+            job.updated_at = datetime.now(timezone.utc)
             self.session.add(job)
 
     def find_pending_jobs(self, limit: int = 100) -> List[VideoDownloadJob]:

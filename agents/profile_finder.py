@@ -5,7 +5,7 @@ from database.repositories import SocialProfileRepository
 from scrapers.social.instagram import InstagramScraper
 from services.scoring import calculate_engagement_score
 from config.logging_config import get_logger
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class ProfileFinderAgent(BaseAgent[Company, SocialProfile]):
@@ -109,7 +109,7 @@ class ProfileFinderAgent(BaseAgent[Company, SocialProfile]):
                     "posts_count": profile_data.get("posts_count"),
                     "engagement_score": engagement_score,
                     "content_type": "mixed",  # Will be classified later by VideoFinderAgent
-                    "last_scraped_at": datetime.utcnow(),
+                    "last_scraped_at": datetime.now(timezone.utc),
                     "is_active": True
                 })
 

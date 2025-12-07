@@ -14,7 +14,7 @@ Supports both CLI and REST API modes:
 
 import argparse
 from typing import Dict, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 import uvicorn
 
@@ -237,12 +237,32 @@ class AgentOrchestrator:
                 'downloads': 0
             }
 
-        # Step 4: Download videos
+        # Step 4: Download videos (limit per company)
+        # Group posts by company
+        posts_by_company = {}
+        for post in all_posts:
+            # Get company_id from the profile
+            profile = next((p for p in all_profiles if p.id == post.social_profile_id), None)
+            if profile:
+                company_id = profile.company_id
+                if company_id not in posts_by_company:
+                    posts_by_company[company_id] = []
+                posts_by_company[company_id].append(post)
+
+        # Limit posts per company based on VIDEO_DOWNLOAD_PER_COMPANY setting
+        posts_to_download = []
+        for company_id, posts in posts_by_company.items():
+            # Take only the first N posts per company (already sorted by views/engagement)
+            limited_posts = posts[:settings.VIDEO_DOWNLOAD_PER_COMPANY]
+            posts_to_download.extend(limited_posts)
+
         self.logger.info(
             "Step 4/4: Downloading videos",
-            post_count=len(all_posts)
+            total_posts=len(all_posts),
+            posts_to_download=len(posts_to_download),
+            limit_per_company=settings.VIDEO_DOWNLOAD_PER_COMPANY
         )
-        download_jobs = self.downloader_agent.execute(all_posts)
+        download_jobs = self.downloader_agent.execute(posts_to_download)
 
         # Calculate results
         results = {
@@ -290,7 +310,7 @@ def run_discovery_pipeline(job_id: str, city: str, country: str, limit: int):
     try:
         job_status[job_id] = {
             "status": "running",
-            "started_at": datetime.utcnow(),
+            "started_at": datetime.now(timezone.utc),
             "progress": "Discovering companies..."
         }
 
@@ -320,14 +340,34 @@ def run_discovery_pipeline(job_id: str, city: str, country: str, limit: int):
                 posts = orchestrator.video_finder_agent.execute(profile)
                 all_posts.extend(posts)
 
-            # Step 4: Download videos
-            job_status[job_id]["progress"] = f"Downloading {len(all_posts)} videos..."
-            download_jobs = orchestrator.downloader_agent.execute(all_posts)
+            # Step 4: Download videos (limit per company)
+            job_status[job_id]["progress"] = f"Preparing to download videos (limit: {settings.VIDEO_DOWNLOAD_PER_COMPANY} per company)..."
+
+            # Group posts by company
+            posts_by_company = {}
+            for post in all_posts:
+                # Get company_id from the profile
+                profile = next((p for p in all_profiles if p.id == post.social_profile_id), None)
+                if profile:
+                    company_id = profile.company_id
+                    if company_id not in posts_by_company:
+                        posts_by_company[company_id] = []
+                    posts_by_company[company_id].append(post)
+
+            # Limit posts per company based on VIDEO_DOWNLOAD_PER_COMPANY setting
+            posts_to_download = []
+            for company_id, posts in posts_by_company.items():
+                # Take only the first N posts per company (already sorted by views/engagement)
+                limited_posts = posts[:settings.VIDEO_DOWNLOAD_PER_COMPANY]
+                posts_to_download.extend(limited_posts)
+
+            job_status[job_id]["progress"] = f"Downloading {len(posts_to_download)} videos..."
+            download_jobs = orchestrator.downloader_agent.execute(posts_to_download)
 
             # Update job status
             job_status[job_id] = {
                 "status": "completed",
-                "completed_at": datetime.utcnow(),
+                "completed_at": datetime.now(timezone.utc),
                 "companies_discovered": len(companies),
                 "profiles_found": len(all_profiles),
                 "videos_found": len(all_posts),
@@ -339,7 +379,7 @@ def run_discovery_pipeline(job_id: str, city: str, country: str, limit: int):
         job_status[job_id] = {
             "status": "failed",
             "error": str(e),
-            "failed_at": datetime.utcnow()
+            "failed_at": datetime.now(timezone.utc)
         }
 
 
